@@ -1,3 +1,16 @@
+# ⚠️ PROPRIETARY ARCHITECTURE NOTICE
+
+**Copyright © 2026 Shuaib Adams. All Rights Reserved.**
+
+The architectures, designs, workflows, "Machine Readable Spec" (MRS) protocols, and "Pentad Council" governance structures detailed in this repository are the exclusive intellectual property of Shuaib Adams.
+
+**Rights:**
+1. **Inspection:** You are granted a limited license to view this documentation for evaluation, educational, or hiring purposes only.
+2. **No Derivatives:** You may NOT use these architectural patterns, logic flows, or governance structures to build a competing product, service, or internal tool without express written permission.
+3. **No Commercial Use:** This design is "Source Available" but NOT Open Source.
+
+This repository serves as a portfolio of engineering capability. The underlying implementation details are proprietary.
+
 # n8n Foundry (v3)
 
 This repository encapsulates the core components and architectural blueprint for the n8n Foundry system, specifically focusing on its third iteration (v3). It integrates various workflows and database schemas designed to orchestrate complex, AI-driven processes, likely pertaining to software development or project management.
