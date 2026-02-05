@@ -1,0 +1,572 @@
+{
+  "name": "Foundry v3.0: Prompt Master (MRS Generator)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "prompt-master",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger-001",
+      "name": "Webhook Trigger (CTO Input)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "foundry-prompt-master-v3",
+      "notes": "Entry point: CTO sends human-speak request"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "raw_input",
+              "name": "raw_input",
+              "value": "={{ $json.body.request || $json.request }}",
+              "type": "string"
+            },
+            {
+              "id": "cto_priority",
+              "name": "cto_priority",
+              "value": "={{ $json.body.priority || 5 }}",
+              "type": "number"
+            },
+            {
+              "id": "context",
+              "name": "context",
+              "value": "={{ $json.body.context || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-input-002",
+      "name": "Extract & Validate Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [460, 300],
+      "notes": "Parse incoming webhook payload"
+    },
+    {
+      "parameters": {
+        "jsCode": "// PRE-PROCESSING: Detect request type and complexity\nconst rawInput = $json.raw_input;\nconst context = $json.context;\n\n// Basic complexity heuristics\nconst wordCount = rawInput.split(/\\s+/).length;\nconst hasCodeKeywords = /\\b(API|database|authentication|deploy|test|migrate)\\b/i.test(rawInput);\nconst hasBrandKeywords = /\\b(brand|social media|marketing|proposal|content)\\b/i.test(rawInput);\nconst hasInfraKeywords = /\\b(server|docker|kubernetes|CI\\/CD|infrastructure)\\b/i.test(rawInput);\n\n// Estimate complexity\nlet estimatedComplexity = 'low';\nif (wordCount > 100 || (hasCodeKeywords && hasInfraKeywords)) {\n  estimatedComplexity = 'high';\n} else if (wordCount > 30 || hasCodeKeywords || hasBrandKeywords) {\n  estimatedComplexity = 'medium';\n}\n\n// Suggest department (will be refined by Gemini)\nlet suggestedDepartment = 'software_development'; // default\nif (hasBrandKeywords) {\n  suggestedDepartment = 'creative_social';\n} else if (hasInfraKeywords) {\n  suggestedDepartment = 'systems_architecture';\n}\n\nreturn {\n  json: {\n    raw_input: rawInput,\n    context: context,\n    word_count: wordCount,\n    estimated_complexity: estimatedComplexity,\n    suggested_department: suggestedDepartment,\n    cto_priority: $json.cto_priority,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "preprocess-003",
+      "name": "Preprocess Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "notes": "Analyze input before sending to Gemini"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "={{ $credentials.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "contents",
+              "value": "={{ [{\n  \"parts\": [{\n    \"text\": `You are the Prompt Master for The Foundry - a 60+ worker AI swarm operating in South Africa.\\n\\nYour ONLY job is to convert human requests into a strict Machine Readable Spec (MRS) JSON.\\n\\n**CRITICAL REQUIREMENTS:**\\n1. Output MUST be valid JSON with these EXACT fields:\\n   - goal (string): Clear, actionable objective\\n   - constraints (array of objects): Each with {type, description, priority}\\n   - priority_score (integer 1-10): Urgency (1=urgent, 10=low)\\n   - required_team (string): One of: software_development, technical_architecture, creative_social, code_review, reliability_engineering, systems_architecture, it_operations, git_management, executive_admin, brand_strategy, documentation\\n   - target_format (string): One of: code, document, design, report, configuration, test\\n   - estimated_complexity (string): low, medium, high, extreme\\n   - sub_tasks (array of strings): Break down into 3-7 actionable steps\\n\\n2. For South African market context:\\n   - Assume ZAR currency\\n   - Assume POPIA (data protection) compliance requirements\\n   - Consider load-shedding resilience for infrastructure tasks\\n   - Use South African English spelling conventions\\n\\n**USER REQUEST:**\\n${$json.raw_input}\\n\\n**ADDITIONAL CONTEXT:**\\n${$json.context || 'None provided'}\\n\\n**PRE-ANALYSIS:**\\n- Estimated complexity: ${$json.estimated_complexity}\\n- Suggested department: ${$json.suggested_department}\\n- Word count: ${$json.word_count}\\n- CTO priority: ${$json.cto_priority}\\n\\n**OUTPUT FORMAT:**\\nReturn ONLY valid JSON. No markdown, no explanation, no preamble.\\n\\nIf the request is ambiguous, make reasonable assumptions and note them in constraints.`\n  }]}\n]}] }}"
+            },
+            {
+              "name": "generationConfig",
+              "value": "={{ {\n  \"temperature\": 0.3,\n  \"maxOutputTokens\": 4096,\n  \"responseMimeType\": \"application/json\"\n} }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "gemini-mrs-004",
+      "name": "Gemini: Generate MRS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 300],
+      "credentials": {
+        "googleApi": {
+          "id": "1",
+          "name": "Google Gemini API"
+        }
+      },
+      "notes": "Gemini 1.5 Pro converts to MRS format"
+    },
+    {
+      "parameters": {
+        "jsCode": "// PARSE & VALIDATE MRS\nconst geminiResponse = $input.item.json;\nconst preprocessData = $('Preprocess Request').item.json;\n\nif (!geminiResponse.candidates || !geminiResponse.candidates[0]) {\n  throw new Error('Invalid Gemini response: ' + JSON.stringify(geminiResponse));\n}\n\nconst generatedText = geminiResponse.candidates[0].content.parts[0].text;\n\n// Parse MRS JSON\nlet mrs;\ntry {\n  mrs = JSON.parse(generatedText);\n} catch (e) {\n  // Try extracting from markdown if Gemini wrapped it\n  const jsonMatch = generatedText.match(/```json\\n([\\s\\S]*?)\\n```/) || generatedText.match(/```\\n([\\s\\S]*?)\\n```/);\n  if (jsonMatch) {\n    mrs = JSON.parse(jsonMatch[1]);\n  } else {\n    const start = generatedText.indexOf('{');\n    const end = generatedText.lastIndexOf('}') + 1;\n    if (start !== -1 && end > start) {\n      mrs = JSON.parse(generatedText.substring(start, end));\n    } else {\n      throw new Error('Failed to extract JSON from Gemini response');\n    }\n  }\n}\n\n// SCHEMA VALIDATION\nconst requiredFields = ['goal', 'constraints', 'priority_score', 'required_team', 'target_format', 'estimated_complexity', 'sub_tasks'];\nconst missingFields = requiredFields.filter(field => !mrs[field]);\n\nconst validDepartments = [\n  'software_development',\n  'technical_architecture',\n  'creative_social',\n  'code_review',\n  'reliability_engineering',\n  'systems_architecture',\n  'it_operations',\n  'git_management',\n  'executive_admin',\n  'brand_strategy',\n  'documentation'\n];\n\nconst validFormats = ['code', 'document', 'design', 'report', 'configuration', 'test'];\nconst validComplexity = ['low', 'medium', 'high', 'extreme'];\n\nconst validationErrors = [];\n\nif (missingFields.length > 0) {\n  validationErrors.push(`Missing required fields: ${missingFields.join(', ')}`);\n}\n\nif (!validDepartments.includes(mrs.required_team)) {\n  validationErrors.push(`Invalid department: ${mrs.required_team}. Must be one of: ${validDepartments.join(', ')}`);\n}\n\nif (!validFormats.includes(mrs.target_format)) {\n  validationErrors.push(`Invalid format: ${mrs.target_format}. Must be one of: ${validFormats.join(', ')}`);\n}\n\nif (!validComplexity.includes(mrs.estimated_complexity)) {\n  validationErrors.push(`Invalid complexity: ${mrs.estimated_complexity}. Must be one of: ${validComplexity.join(', ')}`);\n}\n\nif (typeof mrs.priority_score !== 'number' || mrs.priority_score < 1 || mrs.priority_score > 10) {\n  validationErrors.push(`Invalid priority_score: ${mrs.priority_score}. Must be integer 1-10`);\n}\n\nif (!Array.isArray(mrs.constraints)) {\n  validationErrors.push('Constraints must be an array');\n}\n\nif (!Array.isArray(mrs.sub_tasks) || mrs.sub_tasks.length < 1) {\n  validationErrors.push('sub_tasks must be an array with at least 1 item');\n}\n\n// ZERO-DRIFT CHECK: If validation fails, this is a CRITICAL schema drift\nconst schemaValid = validationErrors.length === 0;\n\nreturn {\n  json: {\n    mrs: mrs,\n    raw_input: preprocessData.raw_input,\n    schema_valid: schemaValid,\n    validation_errors: validationErrors,\n    gemini_model: 'gemini-1.5-pro',\n    processing_timestamp: new Date().toISOString(),\n    // Carry forward pre-analysis\n    word_count: preprocessData.word_count,\n    cto_priority: preprocessData.cto_priority\n  }\n};"
+      },
+      "id": "validate-mrs-005",
+      "name": "Validate MRS Schema",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "notes": "ZERO-DRIFT ENFORCEMENT: Strict schema validation"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "schema_valid_check",
+              "leftValue": "={{ $json.schema_valid }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-schema-006",
+      "name": "Schema Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1340, 300],
+      "notes": "Branch: Valid → Store | Invalid → Escalate"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "foundry_mrs",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "raw_input": "={{ $json.raw_input }}",
+            "goal": "={{ $json.mrs.goal }}",
+            "constraints": "={{ JSON.stringify($json.mrs.constraints) }}",
+            "priority_score": "={{ $json.mrs.priority_score }}",
+            "required_team": "={{ $json.mrs.required_team }}",
+            "target_format": "={{ $json.mrs.target_format }}",
+            "estimated_complexity": "={{ $json.mrs.estimated_complexity }}",
+            "schema_valid": "={{ $json.schema_valid }}",
+            "validation_errors": "={{ JSON.stringify($json.validation_errors) }}",
+            "approved_by_cto": "false"
+          }
+        },
+        "options": {}
+      },
+      "id": "store-mrs-007",
+      "name": "Store MRS in Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1560, 200],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "VALID path: Store MRS for job queue"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "foundry_schema_violations",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "expected_schema": "={{ JSON.stringify({fields: ['goal', 'constraints', 'priority_score', 'required_team', 'target_format', 'estimated_complexity', 'sub_tasks']}) }}",
+            "actual_output": "={{ JSON.stringify($json.mrs) }}",
+            "violation_type": "schema_validation_failed",
+            "severity": "critical",
+            "auto_remediated": "false"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-violation-008",
+      "name": "Log Schema Violation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1560, 400],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "INVALID path: Log drift incident"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "foundry_error_escalations",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "error_source": "prompt_master",
+            "error_type": "schema_drift_detected",
+            "error_message": "={{ 'Prompt Master generated invalid MRS. Errors: ' + JSON.stringify($json.validation_errors) }}",
+            "escalation_level": "3",
+            "status": "open"
+          }
+        },
+        "options": {}
+      },
+      "id": "escalate-to-cto-009",
+      "name": "Escalate to CTO",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1780, 400],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "CRITICAL: Schema drift requires human review"
+    },
+    {
+      "parameters": {
+        "jsCode": "// PREPARE JOB FOR QUEUE\nconst mrs = $json.mrs;\nconst mrsId = $('Store MRS in Postgres').item.json.id;\n\n// Determine if this needs CTO approval\n// High priority (1-3) or extreme complexity requires approval\nconst needsCtoApproval = mrs.priority_score <= 3 || mrs.estimated_complexity === 'extreme';\n\n// Create job queue entry\nconst job = {\n  mrs_id: mrsId,\n  job_type: mrs.target_format + '_generation',\n  assigned_department: mrs.required_team,\n  priority: mrs.priority_score,\n  status: needsCtoApproval ? 'awaiting_cto_approval' : 'queued',\n  input_data: {\n    goal: mrs.goal,\n    constraints: mrs.constraints,\n    sub_tasks: mrs.sub_tasks,\n    estimated_complexity: mrs.estimated_complexity,\n    target_format: mrs.target_format\n  },\n  needs_cto_approval: needsCtoApproval,\n  approval_reason: needsCtoApproval ? \n    (mrs.priority_score <= 3 ? 'high_priority' : 'extreme_complexity') : null\n};\n\nreturn {\n  json: job\n};"
+      },
+      "id": "prepare-job-010",
+      "name": "Prepare Job for Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 200],
+      "notes": "Create job object for PM workflow"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "needs_approval_check",
+              "leftValue": "={{ $json.needs_cto_approval }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "needs-approval-011",
+      "name": "Needs CTO Approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2000, 200],
+      "notes": "High priority/complexity requires approval"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "foundry_cto_approvals",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "approval_type": "job_start",
+            "request_data": "={{ JSON.stringify($json.input_data) }}",
+            "status": "pending",
+            "requested_by": "prompt_master",
+            "approval_token": "={{ 'FOUNDRY_APPROVAL_' + $json.mrs_id + '_' + Date.now() }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "request-approval-012",
+      "name": "Request CTO Approval",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2220, 100],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Store approval request, await CLI confirmation"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "foundry_job_queue",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "job_type": "={{ $json.job_type }}",
+            "assigned_department": "={{ $json.assigned_department }}",
+            "priority": "={{ $json.priority }}",
+            "status": "={{ $json.status }}",
+            "input_data": "={{ JSON.stringify($json.input_data) }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "add-to-queue-013",
+      "name": "Add to Job Queue",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2220, 300],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Both paths converge here: add job to queue"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  success: true,\n  mrs_id: $('Store MRS in Postgres').item.json.id,\n  job_id: $json.id,\n  status: $json.status,\n  assigned_department: $json.assigned_department,\n  priority: $json.priority,\n  message: $json.status === 'awaiting_cto_approval' ? \n    'High priority job created. Awaiting CTO approval via CLI.' : \n    'Job added to queue. Processing will begin automatically.',\n  approval_token: $json.status === 'awaiting_cto_approval' ? \n    $('Request CTO Approval').item.json.approval_token : null\n} }}"
+      },
+      "id": "respond-success-014",
+      "name": "Respond: Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 200],
+      "notes": "Return job confirmation to CTO"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  success: false,\n  error: 'schema_drift_detected',\n  validation_errors: $json.validation_errors,\n  escalation_id: $('Escalate to CTO').item.json.id,\n  message: 'CRITICAL: Prompt Master produced invalid MRS. This incident has been escalated to CTO for review. System halted to prevent drift.',\n  raw_input: $json.raw_input\n} }}",
+        "options": {
+          "responseCode": "500"
+        }
+      },
+      "id": "respond-error-015",
+      "name": "Respond: Schema Drift Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2000, 400],
+      "notes": "HALT: Do not proceed with invalid MRS"
+    }
+  ],
+  "connections": {
+    "Webhook Trigger (CTO Input)": {
+      "main": [
+        [
+          {
+            "node": "Extract & Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract & Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Preprocess Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preprocess Request": {
+      "main": [
+        [
+          {
+            "node": "Gemini: Generate MRS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: Generate MRS": {
+      "main": [
+        [
+          {
+            "node": "Validate MRS Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate MRS Schema": {
+      "main": [
+        [
+          {
+            "node": "Schema Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schema Valid?": {
+      "main": [
+        [
+          {
+            "node": "Store MRS in Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Schema Violation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store MRS in Postgres": {
+      "main": [
+        [
+          {
+            "node": "Prepare Job for Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Schema Violation": {
+      "main": [
+        [
+          {
+            "node": "Escalate to CTO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalate to CTO": {
+      "main": [
+        [
+          {
+            "node": "Respond: Schema Drift Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Job for Queue": {
+      "main": [
+        [
+          {
+            "node": "Needs CTO Approval?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs CTO Approval?": {
+      "main": [
+        [
+          {
+            "node": "Request CTO Approval",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Add to Job Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request CTO Approval": {
+      "main": [
+        [
+          {
+            "node": "Add to Job Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Job Queue": {
+      "main": [
+        [
+          {
+            "node": "Respond: Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "foundry_error_handler"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "foundry_v3",
+      "id": "tag-foundry-v3"
+    },
+    {
+      "name": "prompt_master",
+      "id": "tag-prompt-master"
+    },
+    {
+      "name": "critical_path",
+      "id": "tag-critical"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-02-04T00:00:00.000Z",
+  "versionId": "foundry-v3-prompt-master-001"
+}

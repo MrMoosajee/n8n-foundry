@@ -1,0 +1,659 @@
+{
+  "name": "Foundry v3.0: Lead Software Developer (Code Gen)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/2 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-001",
+      "name": "Poll Job Queue (Every 2 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300],
+      "notes": "Checks for jobs assigned to software_development"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  jq.id as job_id,\n  jq.job_type,\n  jq.priority,\n  jq.input_data,\n  jq.created_at,\n  m.id as mrs_id,\n  m.goal,\n  m.constraints,\n  m.target_format\nFROM foundry_job_queue jq\nJOIN foundry_mrs m ON m.id = (jq.input_data->>'mrs_id')::int\nWHERE jq.assigned_department = 'software_development'\n  AND jq.status = 'queued'\n  AND NOT EXISTS (\n    SELECT 1 FROM foundry_agent_actions \n    WHERE job_id = jq.id AND success = TRUE\n  )\nORDER BY jq.priority ASC, jq.created_at ASC\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "fetch-job-002",
+      "name": "Fetch Next Code Gen Job",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [460, 300],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Get highest priority job not yet completed"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "job_exists_check",
+              "leftValue": "={{ $json.job_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "any",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "job-found-003",
+      "name": "Job Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "notes": "Exit gracefully if no work"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE foundry_job_queue \nSET status = 'in_progress', started_at = NOW() \nWHERE id = {{ $json.job_id }};",
+        "options": {}
+      },
+      "id": "mark-in-progress-004",
+      "name": "Mark Job In Progress",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [900, 200],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Prevent other workers from picking up this job"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, agent_name, model_primary, capacity, current_load\nFROM foundry_agents\nWHERE department_id = (SELECT id FROM foundry_departments WHERE department_name = 'software_development')\n  AND status = 'idle'\n  AND (capacity - current_load) > 0\nORDER BY (capacity - current_load) DESC, total_jobs_completed ASC\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "find-worker-005",
+      "name": "Find Available Worker",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1120, 200],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Get least busy worker with capacity"
+    },
+    {
+      "parameters": {
+        "jsCode": "// BUILD COMPREHENSIVE CODE GENERATION PROMPT\nconst jobData = $('Fetch Next Code Gen Job').item.json;\nconst workerData = $input.item.json;\n\n// Extract MRS details\nconst goal = jobData.goal;\nconst constraints = JSON.parse(jobData.constraints);\nconst targetFormat = jobData.target_format;\n\n// Build detailed prompt for Qwen Coder\nconst prompt = `You are Worker Agent: ${workerData.agent_name} in The Foundry's Software Development Department.\n\n**PROJECT GOAL:**\n${goal}\n\n**CONSTRAINTS:**\n${constraints.map((c, i) => `${i + 1}. [${c.type}] ${c.description} (Priority: ${c.priority})`).join('\\n')}\n\n**TARGET FORMAT:**\n${targetFormat}\n\n**SOUTH AFRICAN CONTEXT:**\n- Currency: ZAR (South African Rand)\n- Data Protection: POPIA compliance required\n- Infrastructure: Must handle load-shedding (power outages)\n- Time Zone: SAST (UTC+2)\n\n**YOUR TASK:**\nGenerate production-ready code that:\n1. Achieves the stated goal\n2. Respects all constraints\n3. Includes error handling\n4. Is well-documented\n5. Follows best practices for the chosen language/framework\n\n**OUTPUT REQUIREMENTS:**\n- Return a JSON object with this structure:\n  {\n    \"files\": [\n      {\n        \"path\": \"relative/path/to/file.ext\",\n        \"content\": \"actual file content\",\n        \"purpose\": \"explanation of this file's role\"\n      }\n    ],\n    \"setup_instructions\": \"How to run this code\",\n    \"dependencies\": [\"list\", \"of\", \"packages\"],\n    \"notes\": \"Any important information for the user\"\n  }\n\n**CRITICAL:**\n- Output MUST be valid JSON\n- Include ALL necessary files (main code, config, tests, README)\n- Code must be complete and runnable\n- No placeholders like TODO or FIXME\n\nBegin code generation now.`;\n\nreturn {\n  json: {\n    job_id: jobData.job_id,\n    mrs_id: jobData.mrs_id,\n    worker_id: workerData.id,\n    worker_name: workerData.agent_name,\n    model: workerData.model_primary,\n    prompt: prompt,\n    job_start_time: Date.now()\n  }\n};"
+      },
+      "id": "build-prompt-006",
+      "name": "Build Code Gen Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 200],
+      "notes": "Create comprehensive prompt for Ollama"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "={{ $json.model }}"
+            },
+            {
+              "name": "prompt",
+              "value": "={{ $json.prompt }}"
+            },
+            {
+              "name": "stream",
+              "value": "false"
+            },
+            {
+              "name": "options",
+              "value": "={{ {\n  temperature: 0.2,\n  num_predict: 8192,\n  top_p: 0.9,\n  top_k: 40\n} }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "ollama-generate-007",
+      "name": "Ollama: Generate Code",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1560, 200],
+      "notes": "Local Qwen 14B code generation (5 min timeout)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// PARSE & VALIDATE OLLAMA OUTPUT\nconst ollamaResponse = $input.item.json;\nconst promptData = $('Build Code Gen Prompt').item.json;\n\nif (!ollamaResponse.response) {\n  throw new Error('No response from Ollama: ' + JSON.stringify(ollamaResponse));\n}\n\nconst generatedText = ollamaResponse.response;\nconst executionTimeMs = Date.now() - promptData.job_start_time;\n\n// Parse JSON output\nlet codeOutput;\ntry {\n  codeOutput = JSON.parse(generatedText);\n} catch (e) {\n  // Try extracting from markdown\n  const jsonMatch = generatedText.match(/```json\\n([\\s\\S]*?)\\n```/) || generatedText.match(/```\\n([\\s\\S]*?)\\n```/);\n  if (jsonMatch) {\n    codeOutput = JSON.parse(jsonMatch[1]);\n  } else {\n    // Try extracting from first { to last }\n    const start = generatedText.indexOf('{');\n    const end = generatedText.lastIndexOf('}') + 1;\n    if (start !== -1 && end > start) {\n      codeOutput = JSON.parse(generatedText.substring(start, end));\n    } else {\n      throw new Error('Failed to parse Ollama JSON output');\n    }\n  }\n}\n\n// SCHEMA VALIDATION (Zero-Drift Enforcement)\nconst requiredFields = ['files', 'setup_instructions', 'dependencies'];\nconst missingFields = requiredFields.filter(field => !codeOutput[field]);\n\nconst validationErrors = [];\n\nif (missingFields.length > 0) {\n  validationErrors.push(`Missing required fields: ${missingFields.join(', ')}`);\n}\n\nif (!Array.isArray(codeOutput.files) || codeOutput.files.length === 0) {\n  validationErrors.push('files must be a non-empty array');\n} else {\n  // Validate each file object\n  codeOutput.files.forEach((file, idx) => {\n    if (!file.path) validationErrors.push(`File ${idx}: missing path`);\n    if (!file.content) validationErrors.push(`File ${idx}: missing content`);\n    if (!file.purpose) validationErrors.push(`File ${idx}: missing purpose`);\n  });\n}\n\nif (!Array.isArray(codeOutput.dependencies)) {\n  validationErrors.push('dependencies must be an array');\n}\n\nconst schemaValid = validationErrors.length === 0;\n\n// Calculate relevancy score (basic heuristic)\nconst hasMainFile = codeOutput.files?.some(f => f.path.includes('main') || f.path.includes('app') || f.path.includes('index'));\nconst hasTests = codeOutput.files?.some(f => f.path.includes('test'));\nconst hasReadme = codeOutput.files?.some(f => f.path.toLowerCase().includes('readme'));\nconst relevancyScore = (hasMainFile ? 0.4 : 0) + (hasTests ? 0.3 : 0) + (hasReadme ? 0.3 : 0);\n\nreturn {\n  json: {\n    job_id: promptData.job_id,\n    mrs_id: promptData.mrs_id,\n    worker_id: promptData.worker_id,\n    worker_name: promptData.worker_name,\n    model_used: promptData.model,\n    code_output: codeOutput,\n    schema_valid: schemaValid,\n    validation_errors: validationErrors,\n    execution_time_ms: executionTimeMs,\n    relevancy_score: relevancyScore,\n    file_count: codeOutput.files?.length || 0,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "validate-output-008",
+      "name": "Validate Code Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 200],
+      "notes": "ZERO-DRIFT CHECK: Validate output schema"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "schema_valid_check",
+              "leftValue": "={{ $json.schema_valid }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "code-valid-009",
+      "name": "Code Output Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2000, 200],
+      "notes": "Branch: Valid → Store | Invalid → Escalate"
+    },
+    {
+      "parameters": {
+        "jsCode": "// STORE EACH GENERATED FILE AS ARTIFACT\nconst validatedData = $input.item.json;\nconst files = validatedData.code_output.files;\n\n// Create artifacts array\nconst artifacts = files.map(file => ({\n  artifact_type: 'code',\n  file_path: file.path,\n  file_size_bytes: file.content.length,\n  mime_type: 'text/plain', // Will be refined by extension\n  content: file.content,\n  metadata: {\n    purpose: file.purpose,\n    language: file.path.split('.').pop(),\n    worker: validatedData.worker_name\n  }\n}));\n\nreturn artifacts.map(artifact => ({ json: {\n  ...validatedData,\n  artifact: artifact\n}}));"
+      },
+      "id": "prepare-artifacts-010",
+      "name": "Prepare Artifacts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 100],
+      "notes": "Convert files to artifact records"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "foundry_artifacts",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $('Fetch Next Code Gen Job').item.json.mrs_id }}",
+            "artifact_type": "={{ $json.artifact.artifact_type }}",
+            "file_path": "={{ $json.artifact.file_path }}",
+            "file_size_bytes": "={{ $json.artifact.file_size_bytes }}",
+            "mime_type": "={{ $json.artifact.mime_type }}",
+            "content": "={{ $json.artifact.content }}",
+            "metadata": "={{ JSON.stringify($json.artifact.metadata) }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "store-artifacts-011",
+      "name": "Store Artifacts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2440, 100],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Save all generated files"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "foundry_agent_actions",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "job_id": "={{ $json.job_id }}",
+            "agent_id": "={{ $json.worker_id }}",
+            "project_id": "={{ $json.mrs_id }}",
+            "action_type": "generate_code",
+            "input_data": "={{ JSON.stringify($('Build Code Gen Prompt').item.json) }}",
+            "output_data": "={{ JSON.stringify($json.code_output) }}",
+            "model_used": "={{ $json.model_used }}",
+            "execution_time_ms": "={{ $json.execution_time_ms }}",
+            "success": "true",
+            "schema_drift_detected": "false",
+            "relevancy_score": "={{ $json.relevancy_score }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-action-012",
+      "name": "Log Agent Action",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2440, 200],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Full audit trail"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE foundry_job_queue \nSET status = 'completed', \n    completed_at = NOW(),\n    output_data = '{{ JSON.stringify($('Validate Code Output').item.json.code_output) }}'::jsonb\nWHERE id = {{ $('Validate Code Output').item.json.job_id }};",
+        "options": {}
+      },
+      "id": "mark-completed-013",
+      "name": "Mark Job Completed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2660, 200],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Job successfully completed"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "foundry_schema_violations",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "expected_schema": "={{ JSON.stringify({fields: ['files', 'setup_instructions', 'dependencies']}) }}",
+            "actual_output": "={{ JSON.stringify($json.code_output) }}",
+            "violation_type": "invalid_code_output",
+            "field_path": "N/A",
+            "severity": "error",
+            "auto_remediated": "false"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-violation-014",
+      "name": "Log Schema Violation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2220, 300],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "INVALID path: Record drift"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "foundry_agent_actions",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "job_id": "={{ $json.job_id }}",
+            "agent_id": "={{ $json.worker_id }}",
+            "project_id": "={{ $json.mrs_id }}",
+            "action_type": "generate_code",
+            "input_data": "={{ JSON.stringify($('Build Code Gen Prompt').item.json) }}",
+            "output_data": "={{ JSON.stringify($json.code_output) }}",
+            "model_used": "={{ $json.model_used }}",
+            "execution_time_ms": "={{ $json.execution_time_ms }}",
+            "success": "false",
+            "error_message": "={{ 'Schema validation failed: ' + JSON.stringify($json.validation_errors) }}",
+            "schema_drift_detected": "true",
+            "drift_details": "={{ JSON.stringify($json.validation_errors) }}",
+            "relevancy_score": "0.00"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-failed-action-015",
+      "name": "Log Failed Action",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2440, 300],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Record failure in audit log"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE foundry_job_queue \nSET status = 'failed',\n    completed_at = NOW(),\n    error_message = 'Schema drift detected: {{ JSON.stringify($('Validate Code Output').item.json.validation_errors) }}',\n    retry_count = retry_count + 1\nWHERE id = {{ $('Validate Code Output').item.json.job_id }};",
+        "options": {}
+      },
+      "id": "mark-failed-016",
+      "name": "Mark Job Failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2660, 300],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Increment retry counter"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": {
+          "__rl": true,
+          "value": "foundry_error_escalations",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "job_id": "={{ $('Validate Code Output').item.json.job_id }}",
+            "error_source": "={{ $('Validate Code Output').item.json.worker_name }}",
+            "error_type": "schema_drift",
+            "error_message": "={{ 'Code generation produced invalid output. Validation errors: ' + JSON.stringify($('Validate Code Output').item.json.validation_errors) }}",
+            "escalation_level": "2",
+            "status": "open"
+          }
+        },
+        "options": {}
+      },
+      "id": "escalate-017",
+      "name": "Escalate to Management",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2880, 300],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "Foundry DB"
+        }
+      },
+      "notes": "Alert n8n PM of drift incident"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "no_work_message",
+              "name": "message",
+              "value": "No jobs in queue for software_development. Waiting for next poll.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "no-work-018",
+      "name": "No Work Available",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [900, 400],
+      "notes": "Exit gracefully if queue empty"
+    }
+  ],
+  "connections": {
+    "Poll Job Queue (Every 2 min)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Next Code Gen Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Next Code Gen Job": {
+      "main": [
+        [
+          {
+            "node": "Job Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Found?": {
+      "main": [
+        [
+          {
+            "node": "Mark Job In Progress",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Work Available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Job In Progress": {
+      "main": [
+        [
+          {
+            "node": "Find Available Worker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Available Worker": {
+      "main": [
+        [
+          {
+            "node": "Build Code Gen Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Code Gen Prompt": {
+      "main": [
+        [
+          {
+            "node": "Ollama: Generate Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama: Generate Code": {
+      "main": [
+        [
+          {
+            "node": "Validate Code Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Code Output": {
+      "main": [
+        [
+          {
+            "node": "Code Output Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Output Valid?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Artifacts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Schema Violation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Artifacts": {
+      "main": [
+        [
+          {
+            "node": "Store Artifacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Artifacts": {
+      "main": [
+        [
+          {
+            "node": "Log Agent Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Agent Action": {
+      "main": [
+        [
+          {
+            "node": "Mark Job Completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Schema Violation": {
+      "main": [
+        [
+          {
+            "node": "Log Failed Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Failed Action": {
+      "main": [
+        [
+          {
+            "node": "Mark Job Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Job Failed": {
+      "main": [
+        [
+          {
+            "node": "Escalate to Management",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "foundry_error_handler"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "foundry_v3",
+      "id": "tag-foundry-v3"
+    },
+    {
+      "name": "department_lead",
+      "id": "tag-dept-lead"
+    },
+    {
+      "name": "software_development",
+      "id": "tag-software-dev"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-02-04T00:00:00.000Z",
+  "versionId": "foundry-v3-software-dev-lead-001"
+}
